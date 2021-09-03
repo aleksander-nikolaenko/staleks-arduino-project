@@ -1,7 +1,8 @@
 # staleks-arduino-project
 Мои ардуино проекты в компании Staleks
 ## arduino-test
-- Тестовая прошивка Arduino Uno мигание светодиодом на 13 ноге плюс вывод в Serial
+- Мигание светодиодом на 13 ноге 
+- Вывод в Serial информации о состоянии
 ## mineral-gluing-controller
 
 - Вывод в Serial информации для отладки 
