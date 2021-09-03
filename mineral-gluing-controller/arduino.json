@@ -1,0 +1,7 @@
+{
+    "board": "arduino:avr:mega",
+    "port": "COM5",
+    "programmer": "arduino:avrispmkii",
+    "sketch": "staleks-arduino-project\\mineral-gluing-controller\\mineral-gluing-controller.ino",
+    "configuration": "cpu=atmega2560"
+}
