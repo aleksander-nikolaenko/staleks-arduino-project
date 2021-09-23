@@ -14,12 +14,12 @@
 #define DT_ENC 4       // Номер пина для подключения энкодера настроек
 #define KEY_ENC 5      // Номер пина для подключения кнопки энкодера настроек
 
-#define pin_but_Start 7      // Кнопка пуск
-#define pin_but_Stop 8       // Кнопка стоп
-#define pin_but_Home 2       // Кнопка привязка
-#define pin_but_Feed 6       // Кнопка подача
-#define pin_but_Soldering 10 // Кнопка пайка
-#define pin_Sensor_Home 8    // Датчик привязки
+#define pin_but_Start 6 // Кнопка пуск
+#define pin_but_Stop 7  // Кнопка стоп
+#define pin_but_Feed 10 // Кнопка подача
+// #define pin_but_Soldering 10   // Кнопка пайка
+#define pin_Sensor_Home 8      // Датчик привязки
+#define pin_Sensor_Soldering 2 // Кнопка привязка
 
 #define pin_out_Soldering 9 // Выход включение распределителя подачи материала
 #define pin_en_Motor A0     // En драйвера мотора
@@ -34,27 +34,33 @@ int SetPar_st = 0; // переменная переключения состоя
 
 volatile int encCnt = 0; // переменная счета срабатываний энкодера
 
-float SetLenght = 100.0;           // переменная длинны протяжки в mm
-float SetSpeed = 10.0;             // переменная скорость протяжки в м/мин
-float SetLenghtHome = 10.0;        // переменная длинны привязки mm
-float SetTimeoutSoldering = 500.0; // переменная задержка пайки в ms
-float SetTimeoutFeed = 100.0;      // переменная задержка после пайки в ms
-float SetQuantity = 10.0;          // переменная количество изготавливаемых изделий
+uint32_t tm_delay = 0; // переменные для задержки через millis
+uint16_t dt_delay = 0; // переменные для задержки через millis
 
-int speed_set = 1000.0;  // переменная для задания скорости работы имп/сек
-int accel_set = 30000.0; // переменная для задания ускорения двигателя имп/сек^2
+float SetLenght = 100.0;            // переменная длинны протяжки в mm
+float SetHomeSpeed = 5.0;           // переменная скорость привязки в м/мин
+float SetWorkSpeed = 10.0;          // переменная скорость протяжки в м/мин
+float SetLenghtHome = 100.0;        // переменная длинны привязки mm
+float SetTimeoutSoldering = 1000.0; // переменная задержка пайки в ms
+float SetTimeoutFeed = 100.0;       // переменная задержка после пайки в ms
+float SetQuantity = 10.0;           // переменная количество изготавливаемых изделий
 
+int speed_work = 1000.0;       // переменная для задания скорости работы имп/сек
+int accel_set = 30000.0;       // переменная для задания ускорения двигателя имп/сек^2
+int speed_home = 1000.0;       // переменная для задания скорости привязки имп/сек
 float RemainQuantity = 0.0;    // переменная для подсчета оставшегося количества изготавливаемых изделий
 long SetLenghtInPulse = 0;     // переменная для задания длины в импульсах
 long SetLenghtHomeInPulse = 0; // переменная для задания длины на которую нужно отьехать после привязки
+long TargetPosition = 0;       // переменная позиции в которую нужно доехать
 
 //pin-номер пина
 //50-таймаут дребезга
 //1000-время длинного нажатия кнопки
 // 0 - врямя перевода кнопки в генерацию серии нажатий. По умолсанию отключено
 // 0 - время между кликами в серии. По умолчанию 500 мс. Если tm3 = 0 то не работает
-SButton BUT_ENC(KEY_ENC, 50, 1000, 0, 0);
-SButton Start(pin_but_Start, 50, 1000, 0, 0);
+SButton BUT_ENC(KEY_ENC, 30, 1000, 0, 0);
+SButton Start(pin_but_Start, 30, 1500, 0, 0);
+SButton Feed(pin_but_Feed, 30, 1500, 0, 0);
 
 //создаём объект lcd адрес I2C 0x27 или 0x3f
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -75,7 +81,7 @@ void setup()
 
   pinMode(pin_but_Start, INPUT_PULLUP);
   pinMode(pin_but_Stop, INPUT_PULLUP);
-  pinMode(pin_but_Soldering, INPUT_PULLUP);
+  // pinMode(pin_but_Soldering, INPUT_PULLUP);
   pinMode(pin_but_Feed, INPUT_PULLUP);
 
   pinMode(pin_en_Motor, OUTPUT);
@@ -92,9 +98,9 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(CLK_ENC), enc, FALLING);
   delay(50);
   // выводим на дисплей версию прошивки.
-  lcd.setCursor(4, 0);
-  lcd.print("Soldering");
-  lcd.setCursor(6, 2);
+  lcd.setCursor(1, 0);
+  lcd.print("Solder groove");
+  lcd.setCursor(4, 1);
   lcd.print("FW: ");
   lcd.print(FW, 1);
   delay(2000);
@@ -102,11 +108,12 @@ void setup()
   if (EEPROM.read(200) != 32)
   {
     EEPROM.put(0, SetLenght);
-    EEPROM.put(4, SetSpeed);
-    EEPROM.put(8, SetLenghtHome);
-    EEPROM.put(12, SetTimeoutFeed);
-    EEPROM.put(16, SetTimeoutSoldering);
-    EEPROM.put(20, SetQuantity);
+    EEPROM.put(4, SetHomeSpeed);
+    EEPROM.put(8, SetWorkSpeed);
+    EEPROM.put(12, SetLenghtHome);
+    EEPROM.put(16, SetTimeoutFeed);
+    EEPROM.put(20, SetTimeoutSoldering);
+    EEPROM.put(24, SetQuantity);
 
     EEPROM.write(200, 32);
   }
@@ -114,16 +121,18 @@ void setup()
   readEE();
 
   // инициализируем оставшееся количество деталей которые нужно изготовить
-  RemainQuantity = SetQuantity; // обновление оставшегося количества изготавливаемых изделий
-                                // вычисляем установленную длинну в импульсах
+  RemainQuantity = SetQuantity;
+  // вычисляем установленную длинну в импульсах
   SetLenghtInPulse = SetLenght * (STEPPERREV / 265.0);
   // вычисляем длинну в импульсах на которую нужно отъехать от датчика
   SetLenghtHomeInPulse = SetLenghtHome * (STEPPERREV / 265.0);
-  //вычисляем скорость в имп/сек
-  speed_set = (SetSpeed * (STEPPERREV / 265.0) * 1000) / 60;
+  //вычисляем скорость привязки в имп/сек
+  speed_home = (SetHomeSpeed * (STEPPERREV / 265.0) * 1000) / 60;
+  //вычисляем скорость работы в имп/сек
+  speed_work = (SetWorkSpeed * (STEPPERREV / 265.0) * 1000) / 60;
   // инициализация шагового двигателя
   stepperq.init(pin_dir_Motor, pin_pulse_Motor);
-  stepperq.setMaxSpeed(speed_set);
+  stepperq.setMaxSpeed(speed_work);
   stepperq.setAcceleration(accel_set);
   stepperq.setCurrentPosition(0);
 }
@@ -132,11 +141,12 @@ void setup()
 void readEE()
 {
   EEPROM.get(0, SetLenght);
-  EEPROM.get(4, SetSpeed);
-  EEPROM.get(8, SetLenghtHome);
-  EEPROM.get(12, SetTimeoutFeed);
-  EEPROM.get(26, SetTimeoutSoldering);
-  EEPROM.get(20, SetQuantity);
+  EEPROM.get(4, SetHomeSpeed);
+  EEPROM.get(8, SetWorkSpeed);
+  EEPROM.get(12, SetLenghtHome);
+  EEPROM.get(16, SetTimeoutFeed);
+  EEPROM.get(20, SetTimeoutSoldering);
+  EEPROM.get(24, SetQuantity);
 }
 // Прерывание срабатывание энкодера
 void enc()
@@ -154,7 +164,7 @@ void Display()
   {
   case 0:
     lcd.clear();
-    lcd.setCursor(4, 0);
+    lcd.setCursor(2, 0);
     lcd.print("Wait mode");
     lcd.setCursor(0, 1);
     lcd.print("sQt:");
@@ -169,29 +179,38 @@ void Display()
     lcd.print("Parameter mode");
     lcd.setCursor(0, 1);
     lcd.print("Lenght:");
-    lcd.print(SetLenght, 0);
-    lcd.print(" mm");
+    lcd.print(SetLenght, 1);
+    lcd.print("mm");
     break;
   case 2:
     lcd.clear();
     lcd.setCursor(1, 0);
     lcd.print("Parameter mode");
     lcd.setCursor(0, 1);
-    lcd.print("WorkSpeed:");
-    lcd.print(SetSpeed, 0);
+    lcd.print("HSpeed:");
+    lcd.print(SetHomeSpeed, 0);
     lcd.print(" M/min");
     break;
-
   case 3:
     lcd.clear();
     lcd.setCursor(1, 0);
     lcd.print("Parameter mode");
     lcd.setCursor(0, 1);
-    lcd.print("LenghtHome:");
-    lcd.print(SetLenghtHome, 0);
-    lcd.print(" mm");
+    lcd.print("WSpeed:");
+    lcd.print(SetWorkSpeed, 0);
+    lcd.print(" M/min");
     break;
+
   case 4:
+    lcd.clear();
+    lcd.setCursor(1, 0);
+    lcd.print("Parameter mode");
+    lcd.setCursor(0, 1);
+    lcd.print("LenHome:");
+    lcd.print(SetLenghtHome, 1);
+    lcd.print("mm");
+    break;
+  case 5:
     lcd.clear();
     lcd.setCursor(1, 0);
     lcd.print("Parameter mode");
@@ -200,37 +219,42 @@ void Display()
     lcd.print(SetTimeoutFeed, 0);
     lcd.print(" ms");
     break;
-  case 5:
-    lcd.clear();
-    lcd.setCursor(1, 0);
-    lcd.print("Parameter mode");
-    lcd.setCursor(0, 2);
-    lcd.print("TimSoldering:");
-    lcd.print(SetTimeoutSoldering, 0);
-    lcd.print(" ms");
-    break;
   case 6:
     lcd.clear();
     lcd.setCursor(1, 0);
     lcd.print("Parameter mode");
-    lcd.setCursor(0, 2);
+    lcd.setCursor(0, 1);
+    lcd.print("TimSolder:");
+    lcd.print(SetTimeoutSoldering, 0);
+    lcd.print("ms");
+    break;
+  case 7:
+    lcd.clear();
+    lcd.setCursor(1, 0);
+    lcd.print("Parameter mode");
+    lcd.setCursor(0, 1);
     lcd.print("Quantity:");
     lcd.print(SetQuantity, 0);
     break;
 
+  case 9:
+    lcd.clear();
+    lcd.setCursor(2, 0);
+    lcd.print("Return mode");
+    break;
+
   case 10:
     lcd.clear();
-    lcd.setCursor(1, 0);
+    lcd.setCursor(2, 0);
     lcd.print("Homing mode");
-
     break;
 
   case 11:
     lcd.clear();
-    lcd.setCursor(1, 0);
+    lcd.setCursor(3, 0);
     lcd.print("Homing OK");
     lcd.setCursor(3, 1);
-    lcd.print("Wait start");
+    lcd.print("Wait Start");
     break;
 
   case 12:
@@ -245,9 +269,21 @@ void Display()
     lcd.print(RemainQuantity, 0);
     break;
 
+  case 13:
+    lcd.clear();
+    lcd.setCursor(2, 0);
+    lcd.print("Feed mode");
+    break;
+
+  case 14:
+    lcd.clear();
+    lcd.setCursor(2, 0);
+    lcd.print("Solder mode");
+    break;
+
   case 15:
     lcd.clear();
-    lcd.setCursor(1, 0);
+    lcd.setCursor(3, 0);
     lcd.print("Stop mode");
     lcd.setCursor(0, 1);
     lcd.print("sQt:");
@@ -300,8 +336,8 @@ void SettingParameters()
     {
       e += encCnt;
       encCnt = 0;
-      if (e > 6)
-        e = 6; // Задание номера экрана для отображения
+      if (e > 7)
+        e = 7; // Задание номера экрана для отображения
       else if (e < 1)
         e = 1;   // Задание номера экрана для отображения
       Display(); //обновление дисплея
@@ -310,7 +346,7 @@ void SettingParameters()
 
     // установка длины плиты
   case 2:
-    lcd.setCursor(15, 1);
+    lcd.setCursor(14, 1);
     lcd.print("<<");
     switch (BUT_ENC.Loop())
     {
@@ -341,28 +377,28 @@ void SettingParameters()
       else if (SetLenght < 0.5)
         SetLenght = 0.5;
       Display(); //обновление дисплея
-      lcd.setCursor(15, 1);
+      lcd.setCursor(14, 1);
       lcd.print("<<");
     }
     break;
-  
-    // установка скорости
-    case 3: 
-    lcd.setCursor(15, 1);
+
+  // установка скорости привязки
+  case 3:
+    lcd.setCursor(14, 1);
     lcd.print("<<");
     switch (BUT_ENC.Loop())
     {
       // выход из режима установки без сохранения
     case SB_CLICK:
-      speed_set = (SetSpeed * (STEPPERREV / 265.0) * 1000) / 60;
+      speed_home = (SetHomeSpeed * (STEPPERREV / 265.0) * 1000) / 60;
       SetPar_st = 1;
       encCnt = 0;
       Display(); //обновление дисплея
       break;
       // выход из режима установки с сохранением в память
     case SB_LONG_CLICK:
-      EEPROM.put(4, SetSpeed);
-      speed_set = (SetSpeed * (STEPPERREV / 265.0) * 1000) / 60;
+      EEPROM.put(4, SetHomeSpeed);
+      speed_home = (SetHomeSpeed * (STEPPERREV / 265.0) * 1000) / 60;
       SetPar_st = 1;
       encCnt = 0;
       Display(); //обновление дисплея
@@ -371,20 +407,58 @@ void SettingParameters()
     // вращение изменяет значение скорости ручного
     if (encCnt != 0)
     {
-      SetSpeed += encCnt * 1;
+      SetHomeSpeed += encCnt * 1;
       encCnt = 0;
-      if (SetSpeed > 30)
-        SetSpeed = 30;
-      else if (SetSpeed < 1)
-        SetSpeed = 1;
+      if (SetHomeSpeed > 30)
+        SetHomeSpeed = 30;
+      else if (SetHomeSpeed < 1)
+        SetHomeSpeed = 1;
       Display(); //обновление дисплея
-      lcd.setCursor(15, 1);
+      lcd.setCursor(14, 1);
       lcd.print("<<");
     }
     break;
-// Установка отъезда при привязке
+
+  // установка скорости работы
   case 4:
-    lcd.setCursor(15, 1);
+    lcd.setCursor(14, 1);
+    lcd.print("<<");
+    switch (BUT_ENC.Loop())
+    {
+      // выход из режима установки без сохранения
+    case SB_CLICK:
+      speed_work = (SetWorkSpeed * (STEPPERREV / 265.0) * 1000) / 60;
+      SetPar_st = 1;
+      encCnt = 0;
+      Display(); //обновление дисплея
+      break;
+      // выход из режима установки с сохранением в память
+    case SB_LONG_CLICK:
+      EEPROM.put(8, SetWorkSpeed);
+      speed_work = (SetWorkSpeed * (STEPPERREV / 265.0) * 1000) / 60;
+      SetPar_st = 1;
+      encCnt = 0;
+      Display(); //обновление дисплея
+      break;
+    }
+    // вращение изменяет значение скорости ручного
+    if (encCnt != 0)
+    {
+      SetWorkSpeed += encCnt * 1;
+      encCnt = 0;
+      if (SetWorkSpeed > 30)
+        SetWorkSpeed = 30;
+      else if (SetWorkSpeed < 1)
+        SetWorkSpeed = 1;
+      Display(); //обновление дисплея
+      lcd.setCursor(14, 1);
+      lcd.print("<<");
+    }
+    break;
+
+    // Установка отъезда при привязке
+  case 5:
+    lcd.setCursor(14, 1);
     lcd.print("<<");
     switch (BUT_ENC.Loop())
     {
@@ -397,7 +471,7 @@ void SettingParameters()
       break;
       // выход из режима установки с сохранением в память
     case SB_LONG_CLICK:
-      EEPROM.put(8, SetLenghtHome);
+      EEPROM.put(12, SetLenghtHome);
       SetLenghtHomeInPulse = SetLenghtHome * (STEPPERREV / 265.0);
       SetPar_st = 1;
       encCnt = 0;
@@ -407,7 +481,7 @@ void SettingParameters()
     // вращение изменяет значение длины за которую выполняется подача
     if (encCnt != 0)
     {
-      SetLenghtHome += encCnt * 1;
+      SetLenghtHome += encCnt * 0.5;
       encCnt = 0;
       if (SetLenghtHome > 500)
         SetLenghtHome = 500;
@@ -419,9 +493,9 @@ void SettingParameters()
     }
     break;
 
-// установка задержки перед подачей
-  case 5:
-    lcd.setCursor(15, 1);
+    // установка задержки перед подачей
+  case 6:
+    lcd.setCursor(14, 1);
     lcd.print("<<");
     switch (BUT_ENC.Loop())
     {
@@ -433,7 +507,7 @@ void SettingParameters()
       break;
       // выход из режима установки с сохранением в память
     case SB_LONG_CLICK:
-      EEPROM.put(12, SetTimeoutFeed);
+      EEPROM.put(16, SetTimeoutFeed);
       SetPar_st = 1;
       encCnt = 0;
       Display(); //обновление дисплея
@@ -449,14 +523,14 @@ void SettingParameters()
       else if (SetTimeoutFeed < 0)
         SetTimeoutFeed = 0;
       Display(); //обновление дисплея
-      lcd.setCursor(15, 1);
+      lcd.setCursor(14, 1);
       lcd.print("<<");
     }
     break;
 
-// установка задержки пайки
-  case 6:
-    lcd.setCursor(0, 1);
+    // установка задержки пайки
+  case 7:
+    lcd.setCursor(14, 1);
     lcd.print("<<");
     switch (BUT_ENC.Loop())
     {
@@ -468,7 +542,7 @@ void SettingParameters()
       break;
       // выход из режима установки с сохранением в память
     case SB_LONG_CLICK:
-      EEPROM.put(16, SetTimeoutSoldering);
+      EEPROM.put(20, SetTimeoutSoldering);
       SetPar_st = 1;
       encCnt = 0;
       Display(); //обновление дисплея
@@ -484,14 +558,14 @@ void SettingParameters()
       else if (SetTimeoutSoldering < 0)
         SetTimeoutSoldering = 0;
       Display(); //обновление дисплея
-      lcd.setCursor(15, 1);
+      lcd.setCursor(14, 1);
       lcd.print("<<");
     }
     break;
-    
-// установка количества
-  case 7:
-    lcd.setCursor(15, 1);
+
+    // установка количества
+  case 8:
+    lcd.setCursor(14, 1);
     lcd.print("<<");
     switch (BUT_ENC.Loop())
     {
@@ -504,7 +578,7 @@ void SettingParameters()
       break;
       // выход из режима установки с сохранением в память
     case SB_LONG_CLICK:
-      EEPROM.put(20, SetQuantity);
+      EEPROM.put(24, SetQuantity);
       RemainQuantity = SetQuantity; // обновление оставшегося количества изготавливаемых изделий
       SetPar_st = 1;
       encCnt = 0;
@@ -521,14 +595,388 @@ void SettingParameters()
       else if (SetQuantity < 0)
         SetQuantity = 0;
       Display(); //обновление дисплея
-      lcd.setCursor(0, 1);
+      lcd.setCursor(14, 1);
       lcd.print("<<");
     }
     break;
+  }
+}
+// Ожидание нажатия кнопок
+void ManualWaitButton()
+{
+  // кнопка стоп нажата
+  if (digitalRead(pin_but_Stop) == 1)
+  {
+    digitalWrite(pin_en_Motor, 1); // включение S-on драйвера
+    if (debug)
+      Serial.println("StopButon");
+    st = 15; // переход в режим стоп кнопка нажата
+    alarm = 0;
+  }
+  // кнопка start нажата
+  else if (digitalRead(pin_but_Start) == 0)
+  {
 
+    st = 2;
+    e = 10;
+    Display();
+    if (debug)
+      Serial.println("StartButton");
+  }
+  // кнопка feed нажата
+  else if (digitalRead(pin_but_Feed) == 0)
+  {
+    st = 3;
+    e = 13;
+    Display();
+    if (debug)
+      Serial.println("ManFeedButton");
+  }
+
+  // ни одна из кнопок не нажата и экран не обновлен после перехода в этот режим
+  else if (alarm == 1)
+  {
+    digitalWrite(pin_en_Motor, 0); // включение S-on драйвера
+    if (debug)
+      Serial.println("Wait PressButton");
+    e = 0;     // Задание номера экрана для отображения
+    Display(); //обновление дисплея
+    alarm = 0;
   }
 }
 
+// Стоп установки
+void StopMechanism()
+{
+  stepperq.stop();
+  digitalWrite(pin_out_Soldering, 0); //отключение цилиндра паяльника
+  delay(2000);
+  st = 0; // Режим ожидание кнопок
+  if (debug)
+    Serial.println("StopButon");
+}
 void loop()
 {
+  switch (st)
+  {
+  //  Режим ожидание кнопок
+  case 0:
+    SettingParameters(); // Провверка кнопки энкодера если нажата переход в режим установки параметров
+    ManualWaitButton();  // Проверка состояния кнопок если что-то нажато переход в соответствующий режим
+    break;
+  // Установки движения привязки авто режима
+  case 2:
+    if (debug)
+      Serial.println("StartAuto");
+    stepperq.setCurrentPosition(0);
+    TargetPosition = 4000000;
+    stepperq.setMaxSpeed(speed_home); // задаем скорость привязки
+    if (debug)
+      Serial.print("Speed = ");
+    if (debug)
+      Serial.println(speed_home);
+    st = 21; // Старт движения вперед ручной режим
+    break;
+
+  // Старт движения привязки
+  case 21:
+    if (debug)
+      Serial.println("StartMove");
+    if (debug)
+      Serial.print("MoveTo = ");
+    if (debug)
+      Serial.println(TargetPosition);
+    stepperq.moveTo(TargetPosition);
+    stepperq.start();
+    st = 22; // Движение до датчика
+    break;
+
+  // Движение до датчика
+  case 22:
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+      // ожидание пока не сработает датчик Home плиты или кнопка стоп
+      if (digitalRead(pin_Sensor_Home) == 0)
+      {
+        stepperq.stop();
+        if (debug)
+          Serial.println("SensorHomeOk");
+        delay(2000);
+        stepperq.setCurrentPosition(0);
+        TargetPosition = SetLenghtInPulse;
+        st = 23; // отъезд на заданное расстояние
+      }
+    }
+    else
+    {
+      StopMechanism();
+    }
+    break;
+
+  // Старт движения отъезда
+  case 23:
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+      if (debug)
+        Serial.println("MoveHomePosition");
+      if (debug)
+        Serial.print("MoveToHome = ");
+      if (debug)
+        Serial.println(TargetPosition);
+      stepperq.setCurrentPosition(0);
+      stepperq.moveTo(TargetPosition);
+      stepperq.start();
+      st = 24; // ожидание окончания движения
+    }
+    else
+    {
+      StopMechanism();
+    }
+    break;
+
+  // ожидание окончания движения
+  case 24:
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+      // ожидание пока не доедет до позиции Home
+      if (stepperq.currentPosition() == TargetPosition)
+      {
+        if (debug)
+          Serial.println("HomeOk");
+        e = 11;
+        Display();
+        delay(2000);
+        stepperq.setCurrentPosition(0);
+        st = 25; // Ожидание кнопки старт
+      }
+    }
+    else
+    {
+      StopMechanism();
+    }
+    break;
+
+  // Ожидание кнопки старт
+  case 25:
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+      if (digitalRead(pin_but_Start) == 0)
+      {
+        if (debug)
+          Serial.println("StartCicle");
+        e = 12;
+        Display();
+        st = 250; // Начало рабочего цикла
+      }
+    }
+    else
+    {
+      StopMechanism();
+    }
+    break;
+
+  // Начало рабочего цикла
+  case 250:
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+
+      if (digitalRead(pin_but_Start) == 0)
+      {
+        if (debug)
+          Serial.println("Cicle");
+        e = 12;
+        Display();
+        st = 251; // Установки начала движения
+      }
+    }
+    else
+    {
+      StopMechanism();
+    }
+    break;
+
+  // Установки начала движения
+  case 251:
+    stepperq.setCurrentPosition(0);
+    RemainQuantity = SetQuantity;      // обновление оставшегося количества изготавливаемых изделий
+    TargetPosition = SetLenghtInPulse; // Задаем первую точку пайки
+    stepperq.setMaxSpeed(speed_work);  // задаем скорость движения
+    if (debug)
+      Serial.print("Speed = ");
+    if (debug)
+      Serial.println(speed_work);
+    st = 252; // Старт цикла движения
+    break;
+
+  // Старт цикла движения
+  case 252:
+    if (debug)
+      Serial.println("StartCicle");
+    if (debug)
+      Serial.print("MoveTo = ");
+    if (debug)
+      Serial.println(TargetPosition);
+    stepperq.moveTo(TargetPosition);
+    stepperq.start();
+    st = 253; // Движение на заданную длину
+    break;
+
+  // Движение на заданную длину
+  case 253:
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+      // ожидание пока не доедет до позиции Home
+      if (stepperq.currentPosition() == TargetPosition)
+      {
+        if (debug)
+          Serial.println("AutoSoldering");
+        TargetPosition = stepperq.currentPosition() + SetLenghtInPulse; // вычисление позиции следующей пайки
+        digitalWrite(pin_out_Soldering, 1);                             // включение паяльника
+        st = 254;                                                       // Завершение пайки
+      }
+    }
+    else
+    {
+      StopMechanism();
+    }
+    break;
+
+  // Завершение пайки
+  case 254:
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+      // условие если сработал датчик опускания паяльникка
+      if (digitalRead(pin_Sensor_Soldering) == 0)
+      {
+        dt_delay = millis() - tm_delay;
+        if (dt_delay >= 1000)
+        {
+          digitalWrite(pin_out_Soldering, 0);  // отключение цилиндра паяльникка
+          delay(SetTimeoutFeed);               // Задержка на поднятие паяльника (перед началом следующего движения)
+          RemainQuantity = RemainQuantity - 1; // вычисление оставшегося количества изготавливаемых изделий
+          Display();                           // обновление дисплея
+                                               // условие оставшееся количество изготавливаемых изделий равно нулю
+          if (RemainQuantity == 0)
+          {
+            if (debug)
+              Serial.println("AutoPause");
+            st = 255; //Возврат на исходную
+            e = 9;
+            TargetPosition = -100.0;
+            Display();                    //обновление дисплея
+            RemainQuantity = SetQuantity; // обновление оставшегося количества изготавливаемых изделий
+          }
+          // оставшееся количество изготавливаемых изделий не равно нулю
+          else
+          {
+            st = 252; // Старт цикла движения
+          }
+        }
+      }
+    }
+    else
+    {
+      StopMechanism();
+    }
+    break;
+
+    // Старт цикла движения
+  case 255:
+    if (debug)
+      Serial.println("StartReturn");
+    if (debug)
+      Serial.print("MoveTo = ");
+    if (debug)
+      Serial.println(TargetPosition);
+    stepperq.moveTo(TargetPosition);
+    stepperq.start();
+    st = 256; // Окончание движения возврата
+    break;
+
+  // Окончание движения возврата
+  case 256:
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+      // ожидание пока не доедет до позиции Home
+      if (stepperq.currentPosition() == TargetPosition)
+      {
+        if (debug)
+          Serial.println("EndSoldering");
+        st = 0;
+        e = 0;
+        Display();
+      }
+    }
+    else
+    {
+      StopMechanism();
+    }
+    break;
+
+  // Режим стоп кнопка нажата
+  case 15:
+    // условие если кнопка стоп не нажата
+    if (digitalRead(pin_but_Stop) == 0)
+    {
+      RemainQuantity = SetQuantity; // обновление оставшегося количества изготавливаемых изделий
+      st = 0;                       // Ручной режим ожидание кнопок
+    }
+    // кнопка стоп нажата
+    else
+    {
+      if (alarm == 0)
+      {
+        alarm = 1;
+        e = 15;    // Задание номера экрана для отображения
+        Display(); //обновление дисплея
+      }
+      SettingParameters(); // Провверка кнопки энкодера если нажата переход в режим установки параметров
+    }
+    break;
+
+  // Режим настройки параметров
+  case 100:
+    SettingParameters(); // Провверка кнопки энкодера если нажата переход в режим установки параметров
+    break;
+  }
 }
+
+// switch (Start.Loop())
+// {
+// //  Кроткое нажатие запускает автоматический режим
+// case SB_CLICK:
+//   st = 2;
+//   e = 10;
+//   Display();
+//   if (debug)
+//     Serial.println("StartButton");
+//   break;
+//   //  Долгое  нажатие запускает режим привязки
+// case SB_LONG_CLICK:
+//   st = 3;
+//   e = 10;
+//   Display();
+//   if (debug)
+//     Serial.println("ManHomingButton");
+//   break;
+// }
+
+// switch (Feed.Loop())
+// {
+// //  Кроткое нажатие запускает ручную подачу
+// case SB_CLICK:
+//   st = 3;
+//   e = 13;
+//   Display();
+//   if (debug)
+//     Serial.println("ManFeedButton");
+//   break;
+//   //  Долгое  нажатие запускает ручную пайку
+// case SB_LONG_CLICK:
+//   st = 5;
+//   e = 14;
+//   Display();
+//   if (debug)
+//     Serial.println("ManSolderingButton");
+//   break;
+//  }
