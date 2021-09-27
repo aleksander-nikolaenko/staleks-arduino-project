@@ -1,0 +1,6 @@
+{
+    "sketch": "soldering-grooves\\soldering-grooves.ino",
+    "board": "arduino:avr:uno",
+    "programmer": "arduino:avrispmkii",
+    "port": "COM5"
+}
